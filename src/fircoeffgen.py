@@ -1,51 +1,78 @@
 import matplotlib.pyplot as plt
 import scipy.signal as signal
+import numpy as np
+from pylab import *
 import json
-import os ,sys
+import os ,sys, time
+
+#Run FIR
+class FIR:
+    coeff = []
+    xv = []
+    hv = []
+    brange = 0
+    def __init__(self, coeff = list()):
+        if len(coeff) > 0:
+            self.coeff = coeff
+            self.xv = [0]*len(coeff)
+            bCNT = len(coeff)
+            bRange = int(bCNT/2)
+            if bCNT % 2 == 1:
+                bRange += 1 
+            self.brange = bRange  
+            self.crange = bCNT
+            print("__init__ range : {}".format(self.brange))         
+
+    def calculte(self, y):
+        output = 0
+        self.xv[0] = y
+        if self.brange > 0:
+            for i in range(0,self.crange):
+                output += int(self.xv[i]*self.coeff[i])
+            for i in range(0,self.crange):
+                self.xv[self.crange-i-1] = self.xv[self.crange-i-2]
+
+        print("calculte xv : {}".format(self.xv))
+        print("calculte y : {}".format(y))
+        print("calculte output : {}".format(output))
+        # time.sleep(5)
+        return output
+
 
 #Plot frequency and phase response
-def mfreqz(b,a=1):
-    w,h = signal.freqz(b,a)
-    h_dB = 20 * log10 (abs(h))
-    subplot(211)
-    plot(w/max(w),h_dB)
-    ylim(-150, 5)
-    ylabel('Magnitude (db)')
-    xlabel(r'Normalized Frequency (x$\pi$rad/sample)')
-    title(r'Frequency response')
-    subplot(212)
-    h_Phase = unwrap(arctan2(imag(h),real(h)))
-    plot(w/max(w),h_Phase)
-    ylabel('Phase (radians)')
-    xlabel(r'Normalized Frequency (x$\pi$rad/sample)')
-    title(r'Phase response')
-    subplots_adjust(hspace=0.5)
-
-#Plot step and impulse response
-def impz(b,a=1):
-    l = len(b)
-    impulse = repeat(0.,l); impulse[0] =1.
-    x = arange(0,l)
-    response = signal.lfilter(b,a,impulse)
-    subplot(211)
-    stem(x, response)
-    ylabel('Amplitude')
-    xlabel(r'n (samples)')
-    title(r'Impulse response')
-    subplot(212)
-    step = cumsum(response)
-    stem(x, step)
-    ylabel('Amplitude')
-    xlabel(r'n (samples)')
-    title(r'Step response')
-    subplots_adjust(hspace=0.5)
+def filtre_Test(b, y, n = 0):
+    y_filtered = list()
+    fir = FIR(b)
+    for i in y:
+        y_filtered.append(fir.calculte(i))
+    # y_filtered = signal.lfilter(b, 1, y)
+    # print("y : {}".format(y))
+    # print("y\' : {}".format(y_filtered))
+    x = range(0, len(y))
+    plt.plot(x[n:], y[n:], label = "input")
+    plt.plot(x[n:], y_filtered[n:], label = "filtered")
+    plt.legend()
+    plt.show()
 
 def main():
-    n = 3
-    a = signal.firwin(n, cutoff = 0.3, window = "hamming")
+    dict_data = {}
+    dirpath = os.path.dirname(sys.argv[0])
+    n = 4
+    a = signal.firwin(n, cutoff = 0.5)
     print("coeff : {}".format(a))
-    mfreqz(a)
-    impz(a)
+    flists = open("{}".format("datain.json"), 'r')
+    # print("flist was open : {}".format(flists))
+    dat = flists.read()
+    # print("dat : {}".format(dat))
+    if dat :
+        dict_data = json.loads(dat)
+    print("dict Data : {}".format(dict_data))
+    filtre_Test(b=a, y=dict_data["1"], n = n)
+    filtre_Test(b=a, y=dict_data["2"], n = n)
+    filtre_Test(b=a, y=dict_data["3"], n = n)
+    filtre_Test(b=a, y=dict_data["T"], n = n)
+    filtre_Test(b=a, y=dict_data["B"], n = n)
+    # impz(a)
 
 
 if __name__ == '__main__':
