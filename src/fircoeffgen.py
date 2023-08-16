@@ -32,9 +32,9 @@ class FIR:
             for i in range(0,self.crange):
                 self.xv[self.crange-i-1] = self.xv[self.crange-i-2]
 
-        print("calculte xv : {}".format(self.xv))
-        print("calculte y : {}".format(y))
-        print("calculte output : {}".format(output))
+        # print("calculte xv : {}".format(self.xv))
+        # print("calculte y : {}".format(y))
+        # print("calculte output : {}".format(output))
         # time.sleep(5)
         return output
 
@@ -57,21 +57,25 @@ def filtre_Test(b, y, n = 0):
 def main():
     dict_data = {}
     dirpath = os.path.dirname(sys.argv[0])
-    n = 4
-    a = signal.firwin(n, cutoff = 0.5)
+    n = 15
+    a = signal.firwin(n, cutoff = 0.1)
     print("coeff : {}".format(a))
-    flists = open("{}".format("datain.json"), 'r')
+    flists = open("{}".format("coeff.json"), 'w')
+    for eachcoeeff in a:
+        flists.writelines("{:.6f},".format(round(eachcoeeff,6)))
+    flists.close()
+    flists = open("{}".format("Controller20201028_0343_s.json"), 'r')
     # print("flist was open : {}".format(flists))
     dat = flists.read()
     # print("dat : {}".format(dat))
     if dat :
         dict_data = json.loads(dat)
-    print("dict Data : {}".format(dict_data))
-    filtre_Test(b=a, y=dict_data["1"], n = n)
-    filtre_Test(b=a, y=dict_data["2"], n = n)
-    filtre_Test(b=a, y=dict_data["3"], n = n)
-    filtre_Test(b=a, y=dict_data["T"], n = n)
-    filtre_Test(b=a, y=dict_data["B"], n = n)
+    # print("dict Data : {}".format(dict_data))
+    for eachVal in dict_data:
+        # print("each Data : {}".format(eachVal))
+        listKeys = list(eachVal.keys())
+        listVals = list(eachVal.values())
+        filtre_Test(b=a, y=listVals[0], n = n)
     # impz(a)
 
 
