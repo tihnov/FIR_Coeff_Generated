@@ -40,7 +40,7 @@ class FIR:
 
 
 #Plot frequency and phase response
-def filtre_Test(b, y, n = 0):
+def filter_Test(b, y, n = 0):
     y_filtered = list()
     fir = FIR(b)
     for i in y:
@@ -93,7 +93,7 @@ def main():
         # print("each Data : {}".format(eachVal))
         listKeys = list(eachVal.keys())
         listVals = list(eachVal.values())
-        filtre_Test(b=a, y=listVals[0], n = n)
+        filter_Test(b=a, y=listVals[0], n = n)
     # impz(a)
 
 
