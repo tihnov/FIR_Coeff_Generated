@@ -75,7 +75,7 @@ def estimate_coef(x, y):
 def main():
     dict_data = {}
     dirpath = os.path.dirname(sys.argv[0])
-    n = 15
+    n = 31
     a = signal.firwin(n, cutoff = 0.1)
     print("coeff : {}".format(a))
     flists = open("{}".format("coeff.json"), 'w')

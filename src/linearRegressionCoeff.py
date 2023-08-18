@@ -18,6 +18,7 @@ def estimate_coef(x, y):
     m_y = np.mean(y)
  
     # calculating cross-deviation and deviation about x
+    print("n*m_y*m_x : {}".format(n*m_y*m_x))
     SS_xy = np.sum(y*x) - n*m_y*m_x
     SS_xx = np.sum(x*x) - n*m_x*m_x
  
@@ -26,6 +27,21 @@ def estimate_coef(x, y):
     b_0 = m_y - b_1*m_x
  
     return (b_0, b_1)
+
+def linear_Test(x, y, b_0, b_1,b, a):
+    y_predict = list()
+    y_test = list()
+    for i in x:
+        y_predict.append((i*b_1)+b_0)
+        y_test.append((i*b)+a)
+    # y_filtered = signal.lfilter(b, 1, y)
+    # print("y : {}".format(y))
+    # print("y\' : {}".format(y_filtered))
+    plt.scatter(x, y, label = "input")
+    plt.plot(x, y_predict, label = "filtered")
+    plt.plot(x, y_test, label = "y_test")
+    plt.legend()
+    plt.show()
 
 def main():
     dict_data = {}
@@ -37,7 +53,7 @@ def main():
     # for eachcoeeff in a:
     #     flists.writelines("{:.6f},".format(round(eachcoeeff,6)))
     # flists.close()
-    flists = open("{}".format("Controller20201028_0343_x.json"), 'r')
+    flists = open("{}".format("Controller20201028_0343_z.json"), 'r')
     # print("flist was open : {}".format(flists))
     dat = flists.read()
     print("dat : {}".format(dat))
@@ -63,9 +79,11 @@ def main():
 
     for keys, values in thisData.items():
         print("keys : {} - values : {}".format(keys, values))
-        b0,b1 = estimate_coef(values["x"],values["y"])
+        b0,b1 = estimate_coef(values["y"],values["x"])
+        b, a = np.polyfit(values["y"],values["x"], deg=1)
         print("keys : {} - b0 : {} - b1 : {}".format(keys, b0, b1))
-
+        print("keys : {} - a : {} - b : {}".format(keys, a, b))
+        linear_Test(values["y"],values["x"],b0,b1,b, a)
     # impz(a)
 
 
