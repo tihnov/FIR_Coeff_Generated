@@ -1,93 +1,72 @@
+"""Fit per-channel gain/offset calibration from logged sweep data.
+
+Each record looks like {"<channel>": [v0, reading, reference]}. The fit maps the
+sensor reading onto the reference value: reference = gain * reading + offset.
+
+Example:
+    python src/linearRegressionCoeff.py --min-r2 0.99
+"""
+import argparse
+
 import matplotlib.pyplot as plt
-import scipy.signal as signal
 import numpy as np
-from pylab import *
-import json
-import os ,sys, time
 
-thisData = dict()
+from common import fit_line, load_json
 
-def estimate_coef(x, y):
-    # number of observations/points
-    x = np.array(x)
-    y = np.array(y)
-    n = np.size(x)
- 
-    # mean of x and y vector
-    m_x = np.mean(x)
-    m_y = np.mean(y)
- 
-    # calculating cross-deviation and deviation about x
-    print("n*m_y*m_x : {}".format(n*m_y*m_x))
-    SS_xy = np.sum(y*x) - n*m_y*m_x
-    SS_xx = np.sum(x*x) - n*m_x*m_x
- 
-    # calculating regression coefficients
-    b_1 = SS_xy / SS_xx
-    b_0 = m_y - b_1*m_x
- 
-    return (b_0, b_1)
 
-def linear_Test(x, y, b_0, b_1,b, a):
-    y_predict = list()
-    y_test = list()
-    for i in x:
-        y_predict.append((i*b_1)+b_0)
-        y_test.append((i*b)+a)
-    # y_filtered = signal.lfilter(b, 1, y)
-    # print("y : {}".format(y))
-    # print("y\' : {}".format(y_filtered))
-    plt.scatter(x, y, label = "input")
-    plt.plot(x, y_predict, label = "filtered")
-    plt.plot(x, y_test, label = "y_test")
-    plt.legend()
-    plt.show()
+def collect(records):
+    channels = {}
+    for rec in records:
+        for ch, vals in rec.items():
+            d = channels.setdefault(ch, {"reading": [], "reference": []})
+            d["reading"].append(vals[1])
+            d["reference"].append(vals[2])
+    return channels
+
 
 def main():
-    dict_data = {}
-    dirpath = os.path.dirname(sys.argv[0])
-    # n = 15
-    # a = signal.firwin(n, cutoff = 0.1)
-    # print("coeff : {}".format(a))
-    # flists = open("{}".format("linear.json"), 'w')
-    # for eachcoeeff in a:
-    #     flists.writelines("{:.6f},".format(round(eachcoeeff,6)))
-    # flists.close()
-    flists = open("{}".format("Controller20201028_0343_z.json"), 'r')
-    # print("flist was open : {}".format(flists))
-    dat = flists.read()
-    print("dat : {}".format(dat))
-    if dat :
-        dict_data = json.loads(dat)
-    print("dict Data : {}".format(dict_data))
-    for eachVal in dict_data:
-        print("each Data : {}".format(eachVal))
-        listKeys = list(eachVal.keys())[0]
-        listVals = list(eachVal.values())[0]
-        print("listKeys : {} - listVals : {}".format(listKeys, listVals))
-        thisData.update({"{}".format(listKeys):{"y":list(),"x":list()}})
-        # filtre_Test(b=a, y=listVals[0], n = n)
-    for eachVal in dict_data:
-        print("each Data : {}".format(eachVal))
-        listKeys = list(eachVal.keys())[0]
-        listVals = list(eachVal.values())[0]
-        print("listKeys : {} - listVals : {}".format(listKeys, listVals))
-        thisData["{}".format(listKeys)]["y"].append(listVals[1])
-        thisData["{}".format(listKeys)]["x"].append(listVals[2])
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--input", default="Controller20201028_0343_z.json", help="sweep file (default: in data/)")
+    p.add_argument("--min-r2", type=float, default=0.99, help="flag fits below this r2 as unreliable")
+    p.add_argument("--max-reference", type=float, default=None,
+                   help="ignore points above this reference value (e.g. where the sensor saturates)")
+    p.add_argument("--no-plot", action="store_true")
+    args = p.parse_args()
 
-    print("thisData : {}".format(thisData))
+    channels = collect(load_json(args.input))
+    failed = []
+    for ch, d in channels.items():
+        x, y = np.asarray(d["reading"], float), np.asarray(d["reference"], float)
+        if args.max_reference is not None:
+            keep = y <= args.max_reference
+            x, y = x[keep], y[keep]
+        try:
+            gain, offset, r2 = fit_line(x, y)
+        except ValueError as e:
+            print("channel {}: cannot fit ({})".format(ch, e))
+            failed.append(ch)
+            continue
+        ok = r2 >= args.min_r2
+        if not ok:
+            failed.append(ch)
+        print("channel {}: gain {:.6f}, offset {:.3f}, r2 {:.5f}, reading range {:.0f}-{:.0f}{}".format(
+            ch, gain, offset, r2, x.min(), x.max(), "" if ok else "  <-- UNRELIABLE"))
 
-    for keys, values in thisData.items():
-        print("keys : {} - values : {}".format(keys, values))
-        b0,b1 = estimate_coef(values["y"],values["x"])
-        b, a = np.polyfit(values["y"],values["x"], deg=1)
-        print("keys : {} - b0 : {} - b1 : {}".format(keys, b0, b1))
-        print("keys : {} - a : {} - b : {}".format(keys, a, b))
-        linear_Test(values["y"],values["x"],b0,b1,b, a)
-    # impz(a)
+        if not args.no_plot:
+            fig, ax = plt.subplots()
+            ax.scatter(x, y, s=12, label="measured")
+            xs = np.linspace(x.min(), x.max(), 2)
+            ax.plot(xs, gain * xs + offset, color="C1", label="fit")
+            ax.set_title("channel {}  r2={:.4f}{}".format(ch, r2, "" if ok else " (UNRELIABLE)"))
+            ax.set_xlabel("sensor reading")
+            ax.set_ylabel("reference")
+            ax.legend()
+
+    if failed:
+        print("\n{} channel(s) failed the r2 >= {} check: {}".format(len(failed), args.min_r2, ", ".join(failed)))
+    if not args.no_plot:
+        plt.show()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
-else:
-    print("name : {}".format(__name__))

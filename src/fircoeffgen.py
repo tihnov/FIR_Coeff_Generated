@@ -1,141 +1,112 @@
+"""Design FIR low-pass coefficients, run them over logged ADC data, and compare
+with the firmware's filtered output.
+
+Example:
+    python src/fircoeffgen.py --taps 5 --cutoff 0.05
+"""
+import argparse
+from collections import deque
+from pathlib import Path
+
 import matplotlib.pyplot as plt
-import scipy.signal as signal
 import numpy as np
-from pylab import *
-import json
-import os ,sys, time
+import scipy.signal as signal
 
-#Run FIR
+from common import COEFF_DIR, fit_line, group_captures, load_json
 
-dict_Pairing = {"adc0":"fir0","adc1":"fir1","adc2":"fir2","adc3":"fir3"}
 
 class FIR:
-    coeff = []
-    xv = []
-    hv = []
-    brange = 0
-    
-    def __init__(self, coeff = list()):
-        if len(coeff) > 0:
-            self.coeff = coeff
-            self.xv = [0]*len(coeff)
-            bCNT = len(coeff)
-            bRange = int(bCNT/2)
-            if bCNT % 2 == 1:
-                bRange += 1 
-            self.brange = bRange  
-            self.crange = bCNT
-            print("__init__ range : {}".format(self.brange))         
+    """Direct-form FIR filter processing one sample at a time.
 
-    def calculte(self, y):
-        output = 0
-        self.xv[0] = y
-        if self.brange > 0:
-            for i in range(0,self.crange):
-                output += int(self.xv[i]*self.coeff[i])
-            for i in range(0,self.crange):
-                self.xv[self.crange-i-1] = self.xv[self.crange-i-2]
+    Products are summed in floating point and rounded once at the end, which
+    avoids the per-tap truncation bias of int(x*c) accumulation.
+    """
 
-        # print("calculte xv : {}".format(self.xv))
-        # print("calculte y : {}".format(y))
-        # print("calculte output : {}".format(output))
-        # time.sleep(5)
-        return output
+    def __init__(self, coeff):
+        if len(coeff) == 0:
+            raise ValueError("FIR needs at least one coefficient")
+        self.coeff = np.asarray(coeff, dtype=float)
+        self.history = deque([0.0] * len(self.coeff), maxlen=len(self.coeff))
+
+    def calculate(self, sample):
+        self.history.appendleft(float(sample))  # history[0] = newest sample
+        return int(round(float(np.dot(self.coeff, self.history))))
 
 
-#Plot frequency and phase response
-def filter_Test(b, y, n = 0):
-    y_filtered = list()
-    ywGain = list()
-    fir = FIR(b)
-    for i in y:
-        temp = fir.calculte(i)
-        y_filtered.append(temp)
-    # y_filtered = signal.lfilter(b, 1, y)
-    # print("y : {}".format(y))
-    # print("y\' : {}".format(y_filtered))
+def design(taps, cutoff, window):
+    coeff = signal.firwin(taps, cutoff=cutoff, pass_zero=True, window=window)
+    w, h = signal.freqz(coeff, worN=8192)
+    below = np.abs(h) < 10 ** (-3 / 20)
+    actual = w[np.argmax(below)] / np.pi if below.any() else 1.0
+    print("coeff ({} taps): {}".format(taps, np.round(coeff, 6)))
+    print("requested cutoff {:.3f} x Nyquist, actual -3 dB point {:.3f} x Nyquist".format(cutoff, actual))
+    if actual > 1.5 * cutoff:
+        print("  WARNING: too few taps to reach the requested cutoff; increase --taps")
+    return coeff
 
-    b0,b1 = estimate_coef(y_filtered[7:], y[7:])
-    print("offset : {} - gain : {}".format(b0,b1))
 
-    for i in y_filtered:
-        ywGain.append(i*b1+b0)
-    # ywGain = y_filtered*b1 + b0
+def write_coeff(coeff, path):
+    # Comma-separated so it can be pasted straight into a C array initialiser.
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join("{:.6f},".format(c) for c in coeff))
+    print("wrote {}".format(path))
 
-    x = range(0, len(y))
-    plt.plot(x[n:], y[n:], label = "input")
-    plt.plot(x[n:], y_filtered[n:], label = "filtered")
-    plt.plot(x[n:], ywGain[n:], label = "filteredwGain")
-    plt.legend()
-    plt.show()
 
-def estimate_coef(x, y):
-    # number of observations/points
-    x = np.array(x)
-    y = np.array(y)
-    n = np.size(x)
- 
-    # mean of x and y vector
-    m_x = np.mean(x)
-    m_y = np.mean(y)
- 
-    # calculating cross-deviation and deviation about x
-    print("n*m_y*m_x : {}".format(n*m_y*m_x))
-    SS_xy = np.sum(y*x) - n*m_y*m_x
-    SS_xx = np.sum(x*x) - n*m_x*m_x
- 
-    # calculating regression coefficients
-    b_1 = SS_xy / SS_xx
-    b_0 = m_y - b_1*m_x
- 
-    return (b_0, b_1)
+def filter_capture(coeff, samples):
+    fir = FIR(coeff)
+    return [fir.calculate(s) for s in samples]
+
+
+def analyse_channel(ch, captures, coeff, plot):
+    skip = len(coeff) - 1  # startup transient, dropped from every capture
+    raw_all, filt_all = [], []
+    for cap in captures:
+        filtered = filter_capture(coeff, cap["adc"])
+        cap["filtered"] = filtered
+        raw_all.extend(cap["adc"][skip:])
+        filt_all.extend(filtered[skip:])
+
+    gain, offset, r2 = fit_line(filt_all, raw_all)
+    print("adc{}: {} captures, gain {:.6f}, offset {:.3f}, r2 {:.5f}".format(
+        ch, len(captures), gain, offset, r2))
+
+    if plot:
+        fig, ax = plt.subplots(figsize=(11, 4))
+        pos = 0
+        for i, cap in enumerate(captures):
+            x = np.arange(pos, pos + len(cap["adc"]))
+            first = i == 0
+            ax.plot(x, cap["adc"], color="C0", lw=0.8, label="adc (raw)" if first else None)
+            ax.plot(x, cap["filtered"], color="C1", label="python FIR" if first else None)
+            if cap["fir"] is not None:
+                ax.plot(x, cap["fir"], color="C2", ls="--", label="firmware fir" if first else None)
+            pos += len(cap["adc"])
+            ax.axvline(pos, color="grey", lw=0.5)
+        ax.set_title("adc{}  (gain {:.4f}, offset {:.2f})".format(ch, gain, offset))
+        ax.set_xlabel("sample (vertical lines = capture boundaries)")
+        ax.legend()
+        fig.tight_layout()
+
 
 def main():
-    dict_data = {}
-    dict_value = {}
-    dirpath = os.path.dirname(sys.argv[0])
-    n = 5
-    a = signal.firwin(n, cutoff = 0.05, pass_zero=True, window="hamming")
-    print("coeff : {}".format(a))
-    flists = open("{}".format("coeff.json"), 'w')
-    for eachcoeeff in a:
-        flists.writelines("{:.6f},".format(round(eachcoeeff,6)))
-    flists.close()
-    flists = open("{}".format("Controller20201028_0343_u.json"), 'r')
-    # print("flist was open : {}".format(flists))
-    dat = flists.read()
-    flists.close()
-    # print("dat : {}".format(dat))
-    if dat :
-        dict_data = json.loads(dat)
-    # print("dict Data : {}".format(dict_data))
-    for eachVal in dict_data:
-        print("each Data : {}".format(eachVal))
-        for key, val in eachVal.items():
-            if key in dict_value.keys():
-                dict_value[key].extend(val)
-            else:
-                dict_value.update({key:list(val)})
-        # print("dict_value : {}".format(dict_value))
-        # listKeys = list(eachVal.keys())
-        # listVals = list(eachVal.values())
-        # filter_Test(b=a, y=listVals[0], n = n)
-    # impz(a)
-    print("dict_value : {}".format(dict_value))
-    # json_object = json.dumps(dict_value, indent = 4) 
-    # print("json_object : {}".format(json_object))
-    # flists = open("{}".format("Controller20201028_0343_s1.json"), 'w')
-    # flists.write(json_object)
-    # flists.close()
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--input", default="Controller20201028_0343_u.json", help="capture file (default: in data/)")
+    p.add_argument("--taps", type=int, default=5)
+    p.add_argument("--cutoff", type=float, default=0.05, help="cutoff as a fraction of Nyquist")
+    p.add_argument("--window", default="hamming")
+    p.add_argument("--out", default=str(COEFF_DIR / "coeff.json"))
+    p.add_argument("--no-plot", action="store_true")
+    args = p.parse_args()
 
-    for keypair, valpair in dict_Pairing.items():
-        print("key : {} - val : {}".format(keypair, valpair))
-        listval = list(dict_value[valpair])
-        filter_Test(b=a, y=listval, n = n)
+    coeff = design(args.taps, args.cutoff, args.window)
+    write_coeff(coeff, Path(args.out))
+
+    channels = group_captures(load_json(args.input))
+    for ch, captures in channels.items():
+        analyse_channel(ch, captures, coeff, plot=not args.no_plot)
+    if not args.no_plot:
+        plt.show()
 
 
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
-else:
-    print("name : {}".format(__name__))
